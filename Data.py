@@ -58,7 +58,7 @@ class AntData:
         y = bdata_df['a'+str(self.ant_id)+'-y']
         return x, y
 
-    def crop_to_ul(self,conversion_factors):
+    def crop_to_ul(self, conversion_factors):
         pass
 
     def unify_overlapping_interactions(self):
@@ -67,9 +67,9 @@ class AntData:
         raw_interaction_ends = self.interactions_df.general_end_frame
         unified_interaction_starts = []
         unified_interaction_ends = [0]
-        for f_st, f_end in zip(raw_interaction_starts,raw_interaction_ends):
+        for f_st, f_end in zip(raw_interaction_starts, raw_interaction_ends):
             if f_st < unified_interaction_ends[-1]:
-                unified_interaction_ends[-1] = max(unified_interaction_ends[-1],f_end)
+                unified_interaction_ends[-1] = max(unified_interaction_ends[-1], f_end)
             else:
                 unified_interaction_starts.append(f_st)
                 unified_interaction_ends.append(f_end)
@@ -77,22 +77,22 @@ class AntData:
         return unified_interaction_starts, unified_interaction_ends
 
     @staticmethod
-    def get_percentile_in_intervals(measurements,interval_starts,interval_ends,percentile=90,set_first_chunk=True):
-        out_dict={}
-        for ii, (i_st, i_end) in enumerate(zip(interval_starts,interval_ends)):
+    def get_percentile_in_intervals(measurements, interval_starts, interval_ends, percentile=90, set_first_chunk=True):
+        out_dict = {}
+        for ii, (i_st, i_end) in enumerate(zip(interval_starts, interval_ends)):
             frame_range = np.arange(i_st, i_end)
-            if i_end-i_st==1 and i_st not in measurements.index:
+            if i_end-i_st == 1 and i_st not in measurements.index:
                 measurements_chunk = measurements[measurements.index.to_series().ge(i_st)].iloc[0]
             else:
                 measurements_chunk = measurements.loc[frame_range]
             if set_first_chunk and (ii == 0):
                 p = 0
             else:
-                p = np.nanpercentile(measurements_chunk,percentile)
-            out_dict.update({frame:p for frame in frame_range})
+                p = np.nanpercentile(measurements_chunk, percentile)
+            out_dict.update({frame: p for frame in frame_range})
         return out_dict
 
-    def clean_crop(self,percentile=90):
+    def clean_crop(self, percentile=90):
         end_frame = max(max(self.crop_dict_raw['red'].index), max(self.crop_dict_raw['red'].index))
         interaction_starts, interaction_ends = self.unify_overlapping_interactions()
 
@@ -100,17 +100,17 @@ class AntData:
         filtered_red = self.crop_dict_raw['red'].where(lambda x: x < self.ymax['red'])
 
         yellow_dict = AntData.get_percentile_in_intervals(filtered_yellow, interaction_ends,
-                                                          interaction_starts,percentile)
+                                                          interaction_starts, percentile)
         red_dict = AntData.get_percentile_in_intervals(filtered_red, interaction_ends,
-                                                          interaction_starts,percentile)
+                                                       interaction_starts, percentile)
 
-        clean_crop_df = pd.DataFrame({'red':red_dict,'yellow':yellow_dict})
-        clean_crop_df = clean_crop_df.reindex(range(end_frame),fill_value=np.NaN)
-        clean_crop_df = clean_crop_df.apply(lambda x: x.interpolate(method='polynomial',order=1))
+        clean_crop_df = pd.DataFrame({'red': red_dict, 'yellow': yellow_dict})
+        clean_crop_df = clean_crop_df.reindex(range(end_frame), fill_value=np.NaN)
+        clean_crop_df = clean_crop_df.apply(lambda x: x.interpolate(method='polynomial', order=1))
         return clean_crop_df
 
     def plot_raw_timeline(self):
-        fig = plt.figure(figsize=[18,4])
+        fig = plt.figure(figsize=[18, 4])
         plt.plot(self.crop_dict_raw['yellow'], '.y', alpha=0.4)
         plt.plot(self.crop_dict_raw['red'], '.r', alpha=0.4)
         plt.ylim([0, max(self.ymax['yellow'], self.ymax['red'])])
@@ -125,11 +125,11 @@ class AntData:
 
         clean_crop_df = self.clean_crop()
 
-        raw_crop_ul={}
-        clean_crop_ul=pd.DataFrame()
-        for c in ['yellow','red']:
-            raw_crop_ul[c] = self.crop_dict_raw[c]/conversion_factors.loc[0,c]
-            clean_crop_ul.loc[:,c] = clean_crop_df[c]/conversion_factors.loc[0,c]
+        raw_crop_ul = {}
+        clean_crop_ul = pd.DataFrame()
+        for c in ['yellow', 'red']:
+            raw_crop_ul[c] = self.crop_dict_raw[c]/conversion_factors.loc[0, c]
+            clean_crop_ul.loc[:, c] = clean_crop_df[c]/conversion_factors.loc[0, c]
 
         fig = plt.figure(figsize=[18, 4])
         plt.plot(raw_crop_ul['yellow'].index * 2.8 / 60, raw_crop_ul['yellow'], '.y', alpha=0.4)
@@ -158,20 +158,20 @@ class AntData:
 
 class ForagerData(AntData):
     def __init__(self, ant_id, feedings_df, bdata_df=None, interactions_df=None):
-        super().__init__(ant_id,bdata_df,interactions_df)
+        super().__init__(ant_id, bdata_df, interactions_df)
         self.is_forager = True
         self.feedings_dict = self.get_feedings_dict(feedings_df)
 
-    def insert_feedings_for_crop_clean(self,interaction_starts,interaction_ends,crop_color):
+    def insert_feedings_for_crop_clean(self, interaction_starts, interaction_ends, crop_color):
         feeding_starts = self.feedings_dict[crop_color]['feeding_start'].tolist()
         feeding_ends = self.feedings_dict[crop_color]['feeding_end'].tolist()
         event_starts = interaction_starts + feeding_starts
         event_ends = interaction_ends + feeding_ends
-        all_events = [event_starts,event_ends]
+        all_events = [event_starts, event_ends]
         sorted_events = np.sort(all_events)
         return sorted_events[0], sorted_events[1]
 
-    def clean_crop(self,percentile=90):
+    def clean_crop(self, percentile=90):
         end_frame = max(max(self.crop_dict_raw['red'].index), max(self.crop_dict_raw['red'].index))
         interaction_starts, interaction_ends = self.unify_overlapping_interactions()
 
@@ -181,14 +181,14 @@ class ForagerData(AntData):
         clean_crop_dict = {}
         for color, crop_measurement in zip(['red', 'yellow'], [filtered_red, filtered_yellow]):
             event_starts, event_ends = self.insert_feedings_for_crop_clean(interaction_starts, interaction_ends, color)
-            clean_crop_dict[color] = AntData.get_percentile_in_intervals(crop_measurement, event_ends, event_starts,percentile)
+            clean_crop_dict[color] = AntData.get_percentile_in_intervals(crop_measurement, event_ends, event_starts, percentile)
 
         clean_crop_df = pd.DataFrame(clean_crop_dict)
         clean_crop_df = clean_crop_df.reindex(range(end_frame), fill_value=np.NaN)
         clean_crop_df = clean_crop_df.apply(lambda x: x.interpolate(method='polynomial', order=1))
         return clean_crop_df
 
-    def get_feedings_dict(self,feedings_df):
+    def get_feedings_dict(self, feedings_df):
         feedings = feedings_df[feedings_df.ant_id == self.ant_id]
         red_feedings = feedings[feedings.food_source == 'red']
         yellow_feedings = feedings[feedings.food_source == 'yellow']
@@ -200,7 +200,7 @@ class ForagerData(AntData):
             crop = self.crop_dict_raw[food_source]
             if len(self.feedings_dict[food_source]) > 0:
                 self.feedings_dict[food_source]['crop_before'] = self.feedings_dict[food_source].apply(
-                    lambda row: ForagerData.get_crop_before(row,crop=crop,ymax=ymax), axis=1)
+                    lambda row: ForagerData.get_crop_before(row, crop=crop, ymax=ymax), axis=1)
                 self.feedings_dict[food_source]['crop_after'] = self.feedings_dict[food_source].apply(
                     lambda row: ForagerData.get_crop_after(row, crop=crop, ymax=ymax), axis=1)
                 self.feedings_dict[food_source]['feeding_size_intensity'] = \
@@ -242,13 +242,13 @@ class ForagerData(AntData):
         raw_crop_ul = {}
         clean_crop_ul = pd.DataFrame()
         for c in ['yellow', 'red']:
-            raw_crop_ul[c] = self.crop_dict_raw[c] / conversion_factors.loc[0,c]
-            clean_crop_ul.loc[:,c] = clean_crop_df[c] / conversion_factors.loc[0,c]
+            raw_crop_ul[c] = self.crop_dict_raw[c] / conversion_factors.loc[0, c]
+            clean_crop_ul.loc[:, c] = clean_crop_df[c] / conversion_factors.loc[0, c]
 
         fig = plt.figure(figsize=[18, 4])
         plt.plot(raw_crop_ul['yellow'].index*2.8/60, raw_crop_ul['yellow'], '.y', alpha=0.4)
         plt.plot(raw_crop_ul['red'].index*2.8/60, raw_crop_ul['red'], '.r', alpha=0.4)
-        plt.ylim([0, max(self.ymax['yellow'] / conversion_factors.loc[0,'yellow'], self.ymax['red'] / conversion_factors.loc[0,'red'])])
+        plt.ylim([0, max(self.ymax['yellow'] / conversion_factors.loc[0, 'yellow'], self.ymax['red'] / conversion_factors.loc[0, 'red'])])
         plt.xlabel('Time [min]')
         plt.ylabel(r'Crop load [$\mu$l]')
         plt.title(f'Ant {self.ant_id}')
@@ -261,7 +261,7 @@ class ForagerData(AntData):
         for start_frame, end_frame in self.feedings_dict['red'][['feeding_start', 'feeding_end']].itertuples(index=False):
             plt.axvspan(start_frame*2.8/60, end_frame*2.8/60, facecolor='r', alpha=0.3)
 
-        clean_crop_ul.set_index(clean_crop_ul.index*2.8/60,inplace=True)
+        clean_crop_ul.set_index(clean_crop_ul.index*2.8/60, inplace=True)
         clean_crop_ul.plot(ax=fig.axes[0], color=[(184 / 255, 134 / 255, 11 / 255), (139 / 255, 0, 0), ], legend=None)
 
         if show:
@@ -270,19 +270,19 @@ class ForagerData(AntData):
 
     def plot_timeline_around_feedings(self):
         self.plot_raw_timeline()
-        colors = {'red':'#8B0000', 'yellow':'#B8860B'}
+        colors = {'red': '#8B0000', 'yellow': '#B8860B'}
         for food_source, feeding_table in zip(self.feedings_dict.keys(), self.feedings_dict.values()):
             x = feeding_table[['last_interaction_before_end', 'feeding_start', 'feeding_end',
                                'first_interaction_after_start']].to_numpy().flatten()
-            y = feeding_table[['crop_before','crop_before','crop_after','crop_after']].to_numpy().flatten()
+            y = feeding_table[['crop_before', 'crop_before', 'crop_after', 'crop_after']].to_numpy().flatten()
             plt.plot(x, y, colors[food_source])
             interactions = feeding_table[['last_interaction_before_end', 'first_interaction_after_start']].to_numpy().flatten()
             plt.vlines(x=interactions, ymin=0, ymax=max(self.ymax['red'], self.ymax['yellow']),
                        linestyles='dotted', colors='k')
 
-    def manual_correction(self,experiment_path):
+    def manual_correction(self, experiment_path):
         corrections = pd.read_excel(experiment_path+sep+'manual_fixes_forager_timelines.xlsx')
-        forager_corrections = corrections[corrections['ant_id']==self.ant_id]
+        forager_corrections = corrections[corrections['ant_id'] == self.ant_id]
         for food_source, crop_data in self.crop_dict_raw.items():
             corrected_crop = copy(crop_data)
             frames_to_replace = forager_corrections['frame_to_replace'][forager_corrections['color'] == food_source]
@@ -292,7 +292,7 @@ class ForagerData(AntData):
 
 
 class InteractionData:
-    def __init__(self):
+    def __init__(self, interactions_df, idx):
         self.group_id = None
         self.ants = None
         self.size = None
@@ -301,11 +301,15 @@ class InteractionData:
         self.location = None
         self.with_forager = False
         self.receiver_crop_before = None
+        self.giver_crop_before = None
+        self.giver = None
+        self.receiver = None
+
         pass
 
 
 class ExperimentData:
-    def __init__(self,exp_num, root_path='Y:\Lior&Einav\Experiments', condition='with food',bdata_path='blob analysis'):
+    def __init__(self, exp_num, root_path=r'Y:\Lior&Einav\Experiments', condition='with food', bdata_path='blob analysis'):
         # general experiment information
         self.exp_num = exp_num
         self.colony = None
@@ -342,17 +346,17 @@ class ExperimentData:
         self.interactions_df = self.load_or_create(r'trophallaxis_table.csv', self.get_interactions_df, write_data=True)
 
         # clean crop data
-        self.clean_crops = self.load_or_create('clean_crops_initial.csv',self.clean_bdata_initial,write_data=True,
-                                               header=[0,1])
+        self.clean_crops = self.load_or_create('clean_crops_initial.csv', self.clean_bdata_initial, write_data=True,
+                                               header=[0, 1])
 
-    def get_ants_info(self,write_data=False):
+    def get_ants_info(self, write_data=False):
         ants_info_df = self.load_or_create('ants_info.csv', self.create_ant_info_file,write_data=write_data)
         num_ants = len(ants_info_df)
         ants_list = ants_info_df.ant_id.tolist()
         foragers_list = ants_info_df.ant_id.loc[ants_info_df['is_forager']].tolist()
         return num_ants, ants_list, foragers_list
 
-    def create_ant_info_file(self,min_detections=100,certainty_thres=0,write_data=False):
+    def create_ant_info_file(self, min_detections=100, certainty_thres=0, write_data=False):
         # get recognized ants
         errors = self.bdata.filter(regex='error$', axis=1)
         all_ants = [int(x[1:-6]) for x in errors.columns]
@@ -362,7 +366,7 @@ class ExperimentData:
 
         # find the foragers
         foragers_list = self.feedings_df['ant_id'].unique()
-        is_forager = np.isin(recognized_ants,foragers_list)
+        is_forager = np.isin(recognized_ants, foragers_list)
 
         # create the file
         ants_info = pd.DataFrame({'ant_id': recognized_ants, 'is_forager': is_forager})
@@ -372,7 +376,7 @@ class ExperimentData:
         return ants_info
 
     def visualize_ant_recognitions(self):
-        errors = self.bdata.filter(regex='error$',axis=1)
+        errors = self.bdata.filter(regex='error$', axis=1)
         mean_error = errors.mean()
         n_detections = errors.count()
         plt.scatter(n_detections, mean_error)
@@ -386,7 +390,7 @@ class ExperimentData:
             np.savetxt(self.exp_path + sep + r'foragers_list.csv', foragers_list,delimiter=',')
         return foragers_list
 
-    def get_exp_path(self,root_path):
+    def get_exp_path(self, root_path):
         folderlist = os.listdir(root_path)
         exp_folder = [x for x in folderlist if x.startswith('experiment'+str(self.exp_num))]
         return root_path + sep + exp_folder[0]
@@ -404,15 +408,15 @@ class ExperimentData:
         # if exists load it
         if os.path.isfile(self.exp_path + sep + filename):
             if filename.endswith('csv'):
-                if load_as=='df':
+                if load_as == 'df':
                     df = pd.read_csv(self.exp_path + sep + filename, header=header)
-                elif load_as=='list':
+                elif load_as == 'list':
                     with open(self.exp_path + sep + filename) as f:
-                        reader=csv.reader(f)
+                        reader = csv.reader(f)
                         df = list(reader)
-                elif load_as=='flat_list':
+                elif load_as == 'flat_list':
                     with open(self.exp_path + sep + filename) as f:
-                        reader=csv.reader(f)
+                        reader = csv.reader(f)
                         df = [int(row[0]) for row in reader]
             elif filename.endswith('xls') or filename.endswith('xlsx'):
                 df = pd.read_excel(self.exp_path + sep + filename)
@@ -436,12 +440,12 @@ class ExperimentData:
                 split1 = filename.split('_')
                 split2 = split1[-1].split('.')
                 vidnum = float(split2[0])
-                p=p.assign(vidnum=vidnum)
-                df_list.append(p[['vidnum','id','actual_ant1','actual_ant2','actual_start','actual_end']])
-        all_interactions_df = pd.concat(df_list,ignore_index=True)
+                p = p.assign(vidnum=vidnum)
+                df_list.append(p[['vidnum', 'id', 'actual_ant1', 'actual_ant2', 'actual_start', 'actual_end']])
+        all_interactions_df = pd.concat(df_list, ignore_index=True)
         all_interactions_df = all_interactions_df.assign(
-            general_start_frame= lambda x: get_general_frame(x.actual_start, x.vidnum),
-            general_end_frame= lambda x: get_general_frame(x.actual_end, x.vidnum))
+            general_start_frame=lambda x: get_general_frame(x.actual_start, x.vidnum),
+            general_end_frame=lambda x: get_general_frame(x.actual_end, x.vidnum))
         all_interactions_df.sort_values(by='general_start_frame', inplace=True)
         all_interactions_df.reset_index(inplace=True, drop=True)
 
@@ -465,16 +469,16 @@ class ExperimentData:
             start_frame, end_frame = trop.general_start_frame, trop.general_end_frame
             if end_frame > final_frame:
                 end_frame = final_frame-1
-            ant1_crop_before = self.clean_crops.loc[start_frame-1,ant1]
-            ant1_crop_after = self.clean_crops.loc[end_frame+1,ant1]
+            ant1_crop_before = self.clean_crops.loc[start_frame-1, ant1]
+            ant1_crop_after = self.clean_crops.loc[end_frame+1, ant1]
             ant1_got = ant1_crop_after - ant1_crop_before
             ant1_x = self.bdata.loc[(start_frame - 1):(end_frame + 1), 'a' + ant1 + '-x'].mean()
             ant1_y = self.bdata.loc[(start_frame - 1):(end_frame + 1), 'a' + ant1 + '-y'].mean()
             if ant2 == '-1':
-                ant2_got = pd.Series({'red':np.nan, 'yellow':np.nan})
+                ant2_got = pd.Series({'red': np.nan, 'yellow': np.nan})
                 ant2_x = np.nan
                 ant2_y = np.nan
-                ant2_crop_before = pd.Series({'red':np.nan, 'yellow':np.nan})
+                ant2_crop_before = pd.Series({'red': np.nan, 'yellow': np.nan})
             else:
                 ant2_crop_before = self.clean_crops.loc[start_frame - 1, ant2]
                 ant2_crop_after = self.clean_crops.loc[end_frame + 1, ant2]
@@ -491,19 +495,19 @@ class ExperimentData:
             ant1_y_dict[idx] = ant1_y
             ant2_y_dict[idx] = ant2_y
 
-        ant1_got_df = pd.concat(ant1_got_dict,axis=1).T
-        ant2_got_df = pd.concat(ant2_got_dict,axis=1).T
-        ant1_got_df.rename(columns={'red': 'ant1_got__red','yellow': 'ant1_got_yellow'}, inplace=True)
-        ant2_got_df.rename(columns={'red': 'ant2_got__red','yellow': 'ant2_got_yellow'}, inplace=True)
+        ant1_got_df = pd.concat(ant1_got_dict, axis=1).T
+        ant2_got_df = pd.concat(ant2_got_dict, axis=1).T
+        ant1_got_df.rename(columns={'red': 'ant1_got__red', 'yellow': 'ant1_got_yellow'}, inplace=True)
+        ant2_got_df.rename(columns={'red': 'ant2_got__red', 'yellow': 'ant2_got_yellow'}, inplace=True)
 
         ant1_crop_before_df = pd.concat(ant1_crop_before_dict, axis=1).T
         ant2_crop_before_df = pd.concat(ant2_crop_before_dict, axis=1).T
         ant1_crop_before_df.rename(columns={'red': 'ant1_crop_before__red', 'yellow': 'ant1_crop_before_yellow'}, inplace=True)
         ant2_crop_before_df.rename(columns={'red': 'ant2_crop_before__red', 'yellow': 'ant2_crop_before_yellow'}, inplace=True)
 
-        loc_df = pd.DataFrame({'ant1_x':ant1_x_dict, 'ant1_y':ant1_y_dict,'ant2_x':ant2_x_dict,'ant2_y':ant2_y_dict})
+        loc_df = pd.DataFrame({'ant1_x': ant1_x_dict, 'ant1_y': ant1_y_dict, 'ant2_x': ant2_x_dict, ' ant2_y': ant2_y_dict})
 
-        enriched_interactions_df = self.interactions_df.join([ant1_got_df,ant2_got_df,ant1_crop_before_df,ant2_crop_before_df,loc_df])
+        enriched_interactions_df = self.interactions_df.join([ant1_got_df, ant2_got_df, ant1_crop_before_df, ant2_crop_before_df, loc_df])
         return enriched_interactions_df
 
     def clean_bdata_initial(self, percentile=90, write_data=False):
@@ -511,12 +515,12 @@ class ExperimentData:
         for ant_id in self.ants_list:
             if ant_id in self.foragers_list:
                 ant = ForagerData(ant_id, feedings_df=self.feedings_df, bdata_df=self.bdata,
-                                       interactions_df=self.interactions_df)
+                                  interactions_df=self.interactions_df)
             else:
                 ant = AntData(ant_id, bdata_df=self.bdata, interactions_df=self.interactions_df)
             clean_crop_ant = ant.clean_crop()
             clean_crops_dict[ant_id] = clean_crop_ant
-        clean_crops_df = pd.concat(clean_crops_dict,axis=1)
+        clean_crops_df = pd.concat(clean_crops_dict, axis=1)
 
         if write_data:
             clean_crops_df.to_csv(self.exp_path + sep + r'clean_crops_initial.csv', index=False)
@@ -555,7 +559,7 @@ class ExperimentData:
         fdata_with_feed_sizes_intensity['feeding_size_intensity'][
             fdata_with_feed_sizes_intensity['feeding_size_intensity'] < 0] = 0
 
-        fdata_with_feed_sizes_intensity.loc[:,['feeding_start','feeding_end','last_interaction_before_end','first_interaction_after_start']] += self.start_frame
+        fdata_with_feed_sizes_intensity.loc[:, ['feeding_start', 'feeding_end', 'last_interaction_before_end', 'first_interaction_after_start']] += self.start_frame
 
         if write_data:
             fdata_with_feed_sizes_intensity.to_csv(
@@ -605,7 +609,3 @@ class ExperimentData:
 
     def crops_animation(self):
         pass
-
-
-
-
