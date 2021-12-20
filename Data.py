@@ -382,7 +382,10 @@ class InteractionData:
 
     # TODO rate confidence
     def rate_ant_confidence(self, ant_id, bdata, clean_crops):
-        ant = AntData(ant_id,bdata)
+        ant = AntData(ant_id, bdata)
+        clean_crop = clean_crops[ant]
+
+        # find intervals before and after based on clean crop
         raw_crops = ant.crop_dict_raw
         pass
 
