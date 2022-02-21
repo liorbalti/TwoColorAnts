@@ -11,7 +11,7 @@ from Data import AntData, ForagerData, ExperimentData
 from os import sep as sep
 
 exp11 = ExperimentData(11, bdata_path='blob analysis normalized by white paper')
-enriched_interactions_df = exp11.enrich_interactions_df()
+enriched_interactions_df = exp11.enrich_interactions_df(write_data=False, filename='trophallaxis_table_enriched_temp')
 
 
 # A = AntData(1004, bdata_df=exp20.bdata, interactions_df=exp20.interactions_df)

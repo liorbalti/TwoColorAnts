@@ -1,3 +1,5 @@
+from typing import Callable, Any
+
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -5,6 +7,8 @@ from os import sep as sep
 from copy import copy
 import os.path
 import csv
+
+from numpy import ndarray
 
 
 def food_volume_to_PC_amounts(vol_ul, PC_ratio, concentration_mg_per_ml=100):
@@ -357,20 +361,21 @@ class ForagerData(AntData):
 
 
 class InteractionData:
-    def __init__(self, interactions_df_row, bdata, clean_crops, final_frame):
+    def __init__(self, interactions_df_row, bdata, clean_crops, final_frame, conversion_factors, margin=0.5):
         self.ants = [str(int(interactions_df_row.actual_ant1)), str(int(interactions_df_row.actual_ant2))]
         self.start_frame, self.end_frame = interactions_df_row.general_start_frame, \
                                            min(interactions_df_row.general_end_frame, final_frame-1)
-        # TODO: self.group_id = self.get_group_id(interactions_df_row)
+        self.group_id = interactions_df_row.group
+        self.is_group = ~np.isnan(self.group_id)
         self.ant1_x, self.ant1_y = self.get_ant_location(self.ants[0], bdata)
         self.ant2_x, self.ant2_y = self.get_ant_location(self.ants[1], bdata)
         self.ant1_crop_before, self.ant1_got = self.get_ant_measurement(self.ants[0], clean_crops)
         self.ant2_crop_before, self.ant2_got = self.get_ant_measurement(self.ants[1], clean_crops)
         self.x = np.mean([self.ant1_x, self.ant2_x])
         self.y = np.mean([self.ant1_y, self.ant2_y])
-        # TODO: self.ant1_confidence = self.rate_ant_confidence(self.ants[0], clean_crops)
-        # TODO: self.ant2_confidence = self.rate_ant_confidence(self.ants[1], clean_crops)
-        # TODO: self.size, self.giver, self.receiver = self.get_interaction_volume_and_direction()
+        self.ant1_confidence = self.rate_ant_confidence(self.ants[0], bdata, clean_crops, conversion_factors)
+        self.ant2_confidence = self.rate_ant_confidence(self.ants[1], bdata, clean_crops, conversion_factors)
+        self.size, self.giver, self.receiver = self.get_interaction_volume_and_direction(margin=margin)
 
     def get_ant_measurement(self, ant, clean_crops):
         if ant == '-1':
@@ -381,19 +386,111 @@ class InteractionData:
         return ant_crop_before, ant_got
 
     # TODO rate confidence
-    def rate_ant_confidence(self, ant_id, bdata, clean_crops):
+    def rate_ant_confidence(self, ant_id, bdata, clean_crops, conversion_factors):
         ant = AntData(ant_id, bdata)
-        clean_crop = clean_crops[ant]
 
-        # find intervals before and after based on clean crop
-        raw_crops = ant.crop_dict_raw
-        pass
+        raw_measurements_before = self.get_ant_measurements_before_or_after(ant_id, bdata, clean_crops, 'before')
+        raw_measurements_after = self.get_ant_measurements_before_or_after(ant_id, bdata, clean_crops, 'after')
 
-    def get_ant_location(self, ant, bdata):
+        # variance of measurements
+        std_before = InteractionData.rate_measurements(raw_measurements_before, np.std)
+        std_after = InteractionData.rate_measurements(raw_measurements_after, np.std)
+
+        # number of measurements
+        num_measurements = lambda x: np.sum(~np.isnan(x))
+        n_before = InteractionData.rate_measurements(raw_measurements_before, num_measurements)
+        n_after = InteractionData.rate_measurements(raw_measurements_after, num_measurements)
+
+        # theoretical confidence
+        coeffs = [0.02028383, -7.40959574]  # fitted from data in "Calculate theoretical confidence.ipynb"
+        cutoff = 600  # cutoff by calibration confidence
+        poly = np.poly1d(coeffs)
+        theoretical_conf = lambda x: np.exp(poly(x))
+        t_conf_before = {}
+        t_conf_after = {}
+        for color in ['red', 'yellow']:
+            t_conf_before[color] = theoretical_conf(min(n_before[color], cutoff))
+            t_conf_after[color] = theoretical_conf(min(n_after[color], cutoff))
+
+        # number of missed measurements
+        num_nans = lambda x: np.sum(np.isnan(x))
+        nans_before = InteractionData.rate_measurements(raw_measurements_before, num_nans)
+        nans_after = InteractionData.rate_measurements(raw_measurements_after, num_nans)
+
+        # number of big jumps in measurements
+
+        # confidence in transfer estimate based on plausible speed of transfer
+        max_plausible_speed = 0.5  # ul per frame, based on "transfer rate statistics.ipynb"
+        # find ant idx in self.ant
+        ant_idx = [i for i, x in enumerate(self.ants) if x == ant_id]
+        attribute_dict = {0: self.ant1_got, 1: self.ant2_got}
+        # get transfer volume estimate from self.ant_got, and convert to ul
+        ant_got = attribute_dict[ant_idx]
+        ant_got_ul = {}
+        for color in ['red', 'yellow']:
+            ant_got_ul[color] = ant_got[color]/conversion_factors[color][0]
+        # calc speed by dividing by duration (from self.end_frame+1-self.start_frame)
+        ant_got_speed = {}
+        too_fast = {}
+        for color in ['red', 'yellow']:
+            ant_got_speed[color] = ant_got_ul[color]/(self.end_frame+1-self.start_frame)
+            too_fast[color] = ant_got_speed[color] > max_plausible_speed
+
+        confidence_df = pd.DataFrame(index=['red', 'yellow'], columns=['n', 'std', 'n_nans', 'too_fast'])
+        for color in ['red', 'yellow']:
+            confidence_df['n'][color] = np.min(n_before[color], n_after[color])
+            confidence_df['ste'][color] = np.mean(std_before[color]/np.sqrt(n_before[color]), std_after[color]/np.sqrt(n_after[color]))
+            confidence_df['n_nans'][color] = np.mean(nans_before[color], nans_after[color])
+            confidence_df['too_fast'][color] = too_fast[color]
+
+        return confidence_df
+
+    @staticmethod
+    def rate_measurements(measurements, function):
+        result = {}
+        for color in ['red', 'yellow']:
+            result[color] = function(measurements[color])
+        return result
+
+    def get_ant_measurements_before_or_after(self, ant_id, bdata, clean_crops, direction):
+        ant = AntData(ant_id, bdata)
+
+        default_closest_change = {'before': 0, 'after': max(clean_crops.index)}
+
+        if direction == 'before':
+            end_frame = {'red': self.start_frame-1, 'yellow': self.start_frame-1}
+            all_measurements_before = clean_crops.loc[0:end_frame['red'], ant_id]
+            start_frame = InteractionData.find_closest_change(all_measurements_before, direction, default_closest_change[direction])
+        elif direction == 'after':
+            start_frame = {'red': self.end_frame+1, 'yellow': self.end_frame+1}
+            all_measurements_after = clean_crops.loc[start_frame['red']:, ant_id]
+            end_frame = InteractionData.find_closest_change(all_measurements_after, direction, default_closest_change[direction])
+
+        raw_measurements = {}
+        for color in ['red', 'yellow']:
+            raw_measurements[color] = ant.crop_dict_raw[color].loc[start_frame[color]:end_frame[color]]
+
+        return raw_measurements
+
+    @staticmethod
+    def find_closest_change(measurements, direction, default_closest_change):
+        take_min_or_max = {'before': max, 'after': min}
+        closest_change = {}
+        for color in ['red', 'yellow']:
+            diff_temp = measurements[color].diff()
+            diff_temp.iloc[0]=0
+            changes_temp = diff_temp != 0
+            if changes_temp.any():
+                closest_change[color] = take_min_or_max[direction](measurements[color][changes_temp].index)
+            else:
+                closest_change[color] = default_closest_change
+        return closest_change
+
+    def get_ant_location(self, ant, bdata, margin=3):
         if ant == '-1':  # if ant_id is unknown
             return np.nan, np.nan
-        x_data = bdata.loc[(self.start_frame - 1):(self.end_frame + 1), 'a' + ant + '-x']
-        y_data = bdata.loc[(self.start_frame - 1):(self.end_frame + 1), 'a' + ant + '-x']
+        x_data = bdata.loc[(self.start_frame - margin):(self.end_frame + margin), 'a' + ant + '-x']
+        y_data = bdata.loc[(self.start_frame - margin):(self.end_frame + margin), 'a' + ant + '-x']
         x_detections = [x for x in x_data if x != -1]  # take values where ant was actually detected
         y_detections = [y for y in y_data if y != -1]
         if not x_detections:  # if ant was not detected
@@ -402,13 +499,49 @@ class InteractionData:
         ant_y = np.mean(y_detections)
         return ant_x, ant_y
 
-    # TODO: get unique group id
-    def get_group_id(self, interactions_df_row):
+    # TODO: get interaction volume
+    def get_interaction_volume_and_direction(self, margin):
+        ant_classifications = self.classify_ants_by_own_measurements(margin)
+
+        # if both ants consistent and directional - take confidence-weighted average
+        # if at least one ant 0 - make zero ant then take confidence-weighted average
+        # if one ant inconsistent - take measurements from other ant
+        # if both ants inconsistent - unknown
+        # if between-ants inconsistent - unknown
+
         pass
 
-    # TODO: get interaction volume
-    def get_interaction_volume_and_direction(self):
+    # TODO: classify interactions
+    @staticmethod
+    def classify_interaction_based_on_two_ants(ant_classifications):
+        directional1 = ant_classifications['ant_1']['giver'] & (ant_classifications['ant_2']['receiver'] | ant_classifications['ant_2']['vol0'])
+        directional2 = ant_classifications['ant_1']['receiver'] & (ant_classifications['ant_2']['giver'] | ant_classifications['ant_2']['vol0'])
+        directional3 = ant_classifications['ant_1']['vol0'] & (ant_classifications['ant_2']['giver'] | ant_classifications['ant_2']['receiver'])
+        directional = directional1 | directional2 | directional3
+
         pass
+
+
+    def classify_ants_by_own_measurements(self, margin):
+        classifications = {}
+        for ant, ant_got in zip(['ant_1', 'ant_2'], [self.ant1_got, self.ant2_got]):
+            giver1 = (ant_got['red'] < margin) & (ant_got['yellow'] <= -margin)
+            giver2 = (ant_got['red'] <= -margin) & (ant_got['yellow'] < margin)
+            giver = giver1 | giver2
+
+            receiver1 = (ant_got['red'] > -margin) & (ant_got['yellow'] >= margin)
+            receiver2 = (ant_got['red'] >= margin) & (ant_got['yellow'] > -margin)
+            receiver = receiver1 | receiver2
+
+            vol0 = (abs(ant_got['red']) < margin) & (abs(ant_got['yellow']) < margin)
+
+            inconsistent1 = (ant_got['red'] >= margin) & (ant_got['yellow'] <= -margin)
+            inconsistent2 = (ant_got['red'] <= -margin) & (ant_got['yellow'] >= margin)
+            inconsistent = inconsistent1 | inconsistent2
+
+            classifications[ant] = {'giver': giver, 'receiver': receiver, 'vol0': vol0, 'inconsistent': inconsistent}
+
+        return classifications
 
 
 class ExperimentData:
@@ -553,11 +686,12 @@ class ExperimentData:
                 split2 = split1[-1].split('.')
                 vidnum = float(split2[0])
                 p = p.assign(vidnum=vidnum)
-                df_list.append(p[['vidnum', 'id', 'actual_ant1', 'actual_ant2', 'actual_start', 'actual_end']])
+                df_list.append(p[['vidnum', 'id', 'actual_ant1', 'actual_ant2', 'actual_start', 'actual_end','group']])
         all_interactions_df = pd.concat(df_list, ignore_index=True)
         all_interactions_df = all_interactions_df.assign(
             general_start_frame=lambda x: get_general_frame(x.actual_start, x.vidnum),
-            general_end_frame=lambda x: get_general_frame(x.actual_end, x.vidnum))
+            general_end_frame=lambda x: get_general_frame(x.actual_end, x.vidnum),
+            general_group_id=lambda x: 10*(x.vidnum-1)+x.group)
         all_interactions_df.sort_values(by='general_start_frame', inplace=True)
         all_interactions_df.reset_index(inplace=True, drop=True)
 
