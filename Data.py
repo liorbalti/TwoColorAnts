@@ -369,20 +369,22 @@ class InteractionData:
         self.is_group = ~np.isnan(self.group_id)
         self.ant1_x, self.ant1_y = self.get_ant_location(self.ants[0], bdata)
         self.ant2_x, self.ant2_y = self.get_ant_location(self.ants[1], bdata)
-        self.ant1_crop_before, self.ant1_got = self.get_ant_measurement(self.ants[0], clean_crops)
-        self.ant2_crop_before, self.ant2_got = self.get_ant_measurement(self.ants[1], clean_crops)
+        self.ant1_crop_before, self.ant1_got = self.get_ant_measurement(self.ants[0], clean_crops, margin=margin)
+        self.ant2_crop_before, self.ant2_got = self.get_ant_measurement(self.ants[1], clean_crops, margin=margin)
         self.x = np.mean([self.ant1_x, self.ant2_x])
         self.y = np.mean([self.ant1_y, self.ant2_y])
         self.ant1_confidence = self.rate_ant_confidence(self.ants[0], bdata, clean_crops, conversion_factors)
         self.ant2_confidence = self.rate_ant_confidence(self.ants[1], bdata, clean_crops, conversion_factors)
-        self.size, self.giver, self.receiver = self.get_interaction_volume_and_direction(margin=margin)
+        self.size, self.giver, self.receiver, self.estimation_confidence = self.get_interaction_volume_and_direction(margin=margin)
 
-    def get_ant_measurement(self, ant, clean_crops):
+    def get_ant_measurement(self, ant, clean_crops, margin=None):
         if ant == '-1':
             return pd.Series({'red': np.nan, 'yellow': np.nan}), pd.Series({'red': np.nan, 'yellow': np.nan})
         ant_crop_before = clean_crops.loc[self.start_frame-1, ant]
         ant_crop_after = clean_crops.loc[self.end_frame+1, ant]
         ant_got = ant_crop_after - ant_crop_before
+        if margin is not None:
+            ant_got[abs(ant_got) < margin] = 0
         return ant_crop_before, ant_got
 
     # TODO rate confidence
@@ -421,10 +423,8 @@ class InteractionData:
 
         # confidence in transfer estimate based on plausible speed of transfer
         max_plausible_speed = 0.5  # ul per frame, based on "transfer rate statistics.ipynb"
-        # find ant idx in self.ant
-        ant_idx = [i for i, x in enumerate(self.ants) if x == ant_id]
+        ant_idx = [i for i, x in enumerate(self.ants) if x == ant_id][0]
         attribute_dict = {0: self.ant1_got, 1: self.ant2_got}
-        # get transfer volume estimate from self.ant_got, and convert to ul
         ant_got = attribute_dict[ant_idx]
         ant_got_ul = {}
         for color in ['red', 'yellow']:
@@ -434,13 +434,13 @@ class InteractionData:
         too_fast = {}
         for color in ['red', 'yellow']:
             ant_got_speed[color] = ant_got_ul[color]/(self.end_frame+1-self.start_frame)
-            too_fast[color] = ant_got_speed[color] > max_plausible_speed
+            too_fast[color] = abs(ant_got_speed[color]) > max_plausible_speed
 
-        confidence_df = pd.DataFrame(index=['red', 'yellow'], columns=['n', 'std', 'n_nans', 'too_fast'])
+        confidence_df = pd.DataFrame(index=['red', 'yellow'], columns=['n', 'ste', 'n_nans', 'too_fast'])
         for color in ['red', 'yellow']:
-            confidence_df['n'][color] = np.min(n_before[color], n_after[color])
-            confidence_df['ste'][color] = np.mean(std_before[color]/np.sqrt(n_before[color]), std_after[color]/np.sqrt(n_after[color]))
-            confidence_df['n_nans'][color] = np.mean(nans_before[color], nans_after[color])
+            confidence_df['n'][color] = np.min([n_before[color], n_after[color]])
+            confidence_df['ste'][color] = np.mean([std_before[color]/np.sqrt(n_before[color]), std_after[color]/np.sqrt(n_after[color])])
+            confidence_df['n_nans'][color] = np.mean([nans_before[color], nans_after[color]])
             confidence_df['too_fast'][color] = too_fast[color]
 
         return confidence_df
@@ -490,7 +490,7 @@ class InteractionData:
         if ant == '-1':  # if ant_id is unknown
             return np.nan, np.nan
         x_data = bdata.loc[(self.start_frame - margin):(self.end_frame + margin), 'a' + ant + '-x']
-        y_data = bdata.loc[(self.start_frame - margin):(self.end_frame + margin), 'a' + ant + '-x']
+        y_data = bdata.loc[(self.start_frame - margin):(self.end_frame + margin), 'a' + ant + '-y']
         x_detections = [x for x in x_data if x != -1]  # take values where ant was actually detected
         y_detections = [y for y in y_data if y != -1]
         if not x_detections:  # if ant was not detected
@@ -502,25 +502,135 @@ class InteractionData:
     # TODO: get interaction volume
     def get_interaction_volume_and_direction(self, margin):
         ant_classifications = self.classify_ants_by_own_measurements(margin)
+        ant1_relative_confidence, ant2_relative_confidence = self.compare_confidences()
+        ant_ids_dict = {'ant_1': self.ants[0], 'ant_2': self.ants[1]}
+        ant_conf_weights = [{}, {}]
+        for color in ['red', 'yellow']:
+            ant_conf_weights[0][color] = ant1_relative_confidence[color]/(ant1_relative_confidence[color]+ant2_relative_confidence[color])
+            ant_conf_weights[1][color] = 1 - ant_conf_weights[0][color]
 
-        # if both ants consistent and directional - take confidence-weighted average
-        # if at least one ant 0 - make zero ant then take confidence-weighted average
-        # if one ant inconsistent - take measurements from other ant
-        # if both ants inconsistent - unknown
-        # if between-ants inconsistent - unknown
+        if ~(ant_classifications['ant_1']['inconsistent'] | ant_classifications['ant_2']['inconsistent']):
+            # no inconsistent ant
 
-        pass
+            if InteractionData.is_directional(ant_classifications):
+                # if ant directions agree - take confidence-weighted average
+                giver, receiver, trop_size = self.get_giver_receiver_volume('directional', ant_ids_dict,
+                                                                            ant_classifications=ant_classifications,
+                                                                            ant_conf_weights=ant_conf_weights)
+                if ant_classifications['ant_1']['vol0'] | ant_classifications['ant_1']['vol0']:
+                    estimation_confidence = 2
+                else:
+                    estimation_confidence = 3
+
+            if InteractionData.is_zero_vol(ant_classifications):
+                # if both ants 0 --> arbitrarily assign ant_1 as giver and trop_size is 0
+                giver, receiver, trop_size = self.get_giver_receiver_volume('zero_vol', ant_ids_dict)
+                estimation_confidence = 3
+
+            if InteractionData.is_inconsistent_between(ant_classifications):
+                # if ant directions don't agree trust ant with higher confidence
+                if (ant1_relative_confidence['red']+ ant1_relative_confidence['yellow']) > (ant2_relative_confidence['red']+ ant2_relative_confidence['yellow']):
+                    higher_conf_ant = 'ant_1'
+                else:
+                    higher_conf_ant = 'ant_2'
+                giver, receiver, trop_size = self.get_giver_receiver_volume('inconsistent_between', ant_ids_dict,
+                                                                            ant_classifications=ant_classifications,
+                                                                            ant_to_trust=higher_conf_ant)
+                estimation_confidence = 1
+
+        else:  # at least one inconsistent ant
+            consistent_ant = [ant for ant, classes in zip(ant_classifications.keys(), ant_classifications.values()) if not classes['inconsistent']]
+            if len(consistent_ant) == 1:
+                # if one ant inconsistent - take measurements from other ant
+                giver, receiver, trop_size = self.get_giver_receiver_volume('one_inconsistent', ant_ids_dict,
+                                                                            ant_classifications=ant_classifications,
+                                                                            ant_to_trust=consistent_ant[0])
+                estimation_confidence = 1
+
+            elif len(consistent_ant) == 0:
+                # if both ants inconsistent - assign arbitrarily ant_1 as giver and volume nan
+                # maybe later improve to take measurement with higher confidence
+                giver, receiver, trop_size = self.get_giver_receiver_volume('both_inconsistent', ant_ids_dict)
+                estimation_confidence = 0
+
+        # rate interaction confidence:
+        # 3 - both ants consistent and directional
+        # 3 - both ants 0
+        # 2 - one ant 0
+        # 1 - one ant inconsistent
+        # 1 - between-ants inconsistent
+        # 0 - both ants inconsistent
+
+        return trop_size, giver, receiver, estimation_confidence
+
+    def get_giver_receiver_volume(self, interaction_type, ant_ids_dict, ant_classifications=None, ant_conf_weights=None,
+                                  ant_to_trust='ant_1'):
+
+        if interaction_type == 'directional':
+            giver_ant = [ant for ant, classes in zip(ant_classifications.keys(), ant_classifications.values()) if classes['giver']]
+            receiver_ant = [ant for ant, classes in zip(ant_classifications.keys(), ant_classifications.values()) if classes['receiver']]
+            giver = ant_ids_dict[giver_ant[0]]
+            receiver = ant_ids_dict[receiver_ant[0]]
+            trop_size = {}
+            for color in ['red', 'yellow']:
+                trop_size[color] = ant_conf_weights[0][color]*np.abs(self.ant1_got[color]) + ant_conf_weights[1][color]*np.abs(self.ant2_got[color])
+
+        if interaction_type == 'zero_vol':
+            giver = ant_ids_dict['ant_1']
+            receiver = ant_ids_dict['ant_2']
+            trop_size = {'red': 0, 'yellow': 0}
+
+        if interaction_type in ['one_inconsistent', 'inconsistent_between']:
+
+            if ant_to_trust == 'ant_1':
+                trop_size = {'red': abs(self.ant1_got['red']), 'yellow': abs(self.ant1_got['yellow'])}
+            else:
+                trop_size = {'red': abs(self.ant2_got['red']), 'yellow': abs(self.ant2_got['yellow'])}
+
+            ant_is_giver = ant_classifications[ant_to_trust]['giver']
+            other_ant = list({'ant_1', 'ant_2'} - {ant_to_trust})[0]
+            if ant_is_giver:
+                giver = ant_ids_dict[ant_to_trust]
+                receiver = ant_ids_dict[other_ant]
+            else:
+                giver = ant_ids_dict[other_ant]
+                receiver = ant_ids_dict[ant_to_trust]
+
+        if interaction_type == 'both_inconsistent':
+            # maybe improve some day
+            giver = ant_ids_dict['ant_1']
+            receiver = ant_ids_dict['ant_2']
+            trop_size = {'red': np.nan, 'yellow': np.nan}
+
+        return giver, receiver, trop_size
+
+    def compare_confidences(self):
+        n1 = self.ant1_confidence['n'] > self.ant2_confidence['n']
+        ste1 = self.ant1_confidence['ste'] < self.ant2_confidence['ste']
+        nans1 = self.ant1_confidence['n_nans'] < self.ant2_confidence['n_nans']
+        ant1_relative_confidence = np.sum(pd.DataFrame([n1, ste1, nans1, ~self.ant1_confidence['too_fast']]))
+        ant2_relative_confidence = np.sum(pd.DataFrame([~n1, ~ste1, ~nans1, ~self.ant2_confidence['too_fast']]))
+        return ant1_relative_confidence, ant2_relative_confidence  # gives one number per color
 
     # TODO: classify interactions
+
     @staticmethod
-    def classify_interaction_based_on_two_ants(ant_classifications):
+    def is_directional(ant_classifications):
         directional1 = ant_classifications['ant_1']['giver'] & (ant_classifications['ant_2']['receiver'] | ant_classifications['ant_2']['vol0'])
         directional2 = ant_classifications['ant_1']['receiver'] & (ant_classifications['ant_2']['giver'] | ant_classifications['ant_2']['vol0'])
         directional3 = ant_classifications['ant_1']['vol0'] & (ant_classifications['ant_2']['giver'] | ant_classifications['ant_2']['receiver'])
-        directional = directional1 | directional2 | directional3
+        return directional1 | directional2 | directional3
 
-        pass
+    @staticmethod
+    def is_zero_vol(ant_classifications):
+        is_zero_vol = ant_classifications['ant_1']['vol0'] & ant_classifications['ant_2']['vol0']
+        return is_zero_vol
 
+    @staticmethod
+    def is_inconsistent_between(ant_classifications):
+        inconsistent_between1 = ant_classifications['ant_1']['giver'] & ant_classifications['ant_2']['giver']
+        inconsistent_between2 = ant_classifications['ant_1']['receiver'] & ant_classifications['ant_2']['receiver']
+        return inconsistent_between1 | inconsistent_between2
 
     def classify_ants_by_own_measurements(self, margin):
         classifications = {}
@@ -715,7 +825,7 @@ class ExperimentData:
         ant2_crop_before_dict = {}
         final_frame = max(self.clean_crops.index)
         for idx, trop_row in self.interactions_df.iterrows():
-            trop = InteractionData(trop_row, self.bdata, self.clean_crops, final_frame)
+            trop = InteractionData(trop_row, self.bdata, self.clean_crops, final_frame, conversion_factors=self.conversion_factors_by_weights_df)
             ant1_got_dict[idx] = trop.ant1_got
             ant2_got_dict[idx] = trop.ant2_got
             ant1_crop_before_dict[idx] = trop.ant1_crop_before
