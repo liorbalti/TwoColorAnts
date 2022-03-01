@@ -371,8 +371,8 @@ class InteractionData:
         self.ant2_x, self.ant2_y = self.get_ant_location(self.ants[1], bdata)
         self.ant1_crop_before, self.ant1_got = self.get_ant_measurement(self.ants[0], clean_crops, margin=margin)
         self.ant2_crop_before, self.ant2_got = self.get_ant_measurement(self.ants[1], clean_crops, margin=margin)
-        self.x = np.mean([self.ant1_x, self.ant2_x])
-        self.y = np.mean([self.ant1_y, self.ant2_y])
+        self.x = np.nanmean([self.ant1_x, self.ant2_x])
+        self.y = np.nanmean([self.ant1_y, self.ant2_y])
         self.ant1_confidence = self.rate_ant_confidence(self.ants[0], bdata, clean_crops, conversion_factors)
         self.ant2_confidence = self.rate_ant_confidence(self.ants[1], bdata, clean_crops, conversion_factors)
         self.size, self.giver, self.receiver, self.estimation_confidence = self.get_interaction_volume_and_direction(margin=margin)
@@ -387,9 +387,17 @@ class InteractionData:
             ant_got[abs(ant_got) < margin] = 0
         return ant_crop_before, ant_got
 
-    # TODO rate confidence
     def rate_ant_confidence(self, ant_id, bdata, clean_crops, conversion_factors):
-        ant = AntData(ant_id, bdata)
+        # ant = AntData(ant_id, bdata)
+
+        if ant_id == '-1':
+            confidence_df = pd.DataFrame(index=['red', 'yellow'], columns=['n', 'ste', 'n_nans', 'too_fast'])
+            for color in ['red', 'yellow']:
+                confidence_df['n'][color] = 0
+                confidence_df['ste'][color] = np.inf
+                confidence_df['n_nans'][color] = np.inf
+                confidence_df['too_fast'][color] = True
+            return confidence_df
 
         raw_measurements_before = self.get_ant_measurements_before_or_after(ant_id, bdata, clean_crops, 'before')
         raw_measurements_after = self.get_ant_measurements_before_or_after(ant_id, bdata, clean_crops, 'after')
@@ -499,7 +507,6 @@ class InteractionData:
         ant_y = np.mean(y_detections)
         return ant_x, ant_y
 
-    # TODO: get interaction volume
     def get_interaction_volume_and_direction(self, margin):
         ant_classifications = self.classify_ants_by_own_measurements(margin)
         ant1_relative_confidence, ant2_relative_confidence = self.compare_confidences()
@@ -508,6 +515,8 @@ class InteractionData:
         for color in ['red', 'yellow']:
             ant_conf_weights[0][color] = ant1_relative_confidence[color]/(ant1_relative_confidence[color]+ant2_relative_confidence[color])
             ant_conf_weights[1][color] = 1 - ant_conf_weights[0][color]
+
+
 
         if ~(ant_classifications['ant_1']['inconsistent'] | ant_classifications['ant_2']['inconsistent']):
             # no inconsistent ant
@@ -529,7 +538,7 @@ class InteractionData:
 
             if InteractionData.is_inconsistent_between(ant_classifications):
                 # if ant directions don't agree trust ant with higher confidence
-                if (ant1_relative_confidence['red']+ ant1_relative_confidence['yellow']) > (ant2_relative_confidence['red']+ ant2_relative_confidence['yellow']):
+                if (ant1_relative_confidence['red']+ ant1_relative_confidence['yellow']) > (ant2_relative_confidence['red'] + ant2_relative_confidence['yellow']):
                     higher_conf_ant = 'ant_1'
                 else:
                     higher_conf_ant = 'ant_2'
@@ -569,8 +578,18 @@ class InteractionData:
         if interaction_type == 'directional':
             giver_ant = [ant for ant, classes in zip(ant_classifications.keys(), ant_classifications.values()) if classes['giver']]
             receiver_ant = [ant for ant, classes in zip(ant_classifications.keys(), ant_classifications.values()) if classes['receiver']]
-            giver = ant_ids_dict[giver_ant[0]]
-            receiver = ant_ids_dict[receiver_ant[0]]
+            zero_vol_ant = [ant for ant, classes in zip(ant_classifications.keys(), ant_classifications.values()) if classes['vol0']]
+            if len(zero_vol_ant) == 0:    # if both ants are not zero volume
+                giver = ant_ids_dict[giver_ant[0]]
+                receiver = ant_ids_dict[receiver_ant[0]]
+            else:    # if one ant is zero volume --> take directions from non-zero ant
+                non_zero_ant = list({'ant_1', 'ant_2'} - {zero_vol_ant[0]})[0]
+                if ant_classifications[non_zero_ant]['giver']:
+                    giver = ant_ids_dict[non_zero_ant]
+                    receiver = ant_ids_dict[zero_vol_ant[0]]
+                else:
+                    receiver = ant_ids_dict[non_zero_ant]
+                    giver = ant_ids_dict[zero_vol_ant[0]]
             trop_size = {}
             for color in ['red', 'yellow']:
                 trop_size[color] = ant_conf_weights[0][color]*np.abs(self.ant1_got[color]) + ant_conf_weights[1][color]*np.abs(self.ant2_got[color])
@@ -612,8 +631,6 @@ class InteractionData:
         ant2_relative_confidence = np.sum(pd.DataFrame([~n1, ~ste1, ~nans1, ~self.ant2_confidence['too_fast']]))
         return ant1_relative_confidence, ant2_relative_confidence  # gives one number per color
 
-    # TODO: classify interactions
-
     @staticmethod
     def is_directional(ant_classifications):
         directional1 = ant_classifications['ant_1']['giver'] & (ant_classifications['ant_2']['receiver'] | ant_classifications['ant_2']['vol0'])
@@ -647,7 +664,8 @@ class InteractionData:
 
             inconsistent1 = (ant_got['red'] >= margin) & (ant_got['yellow'] <= -margin)
             inconsistent2 = (ant_got['red'] <= -margin) & (ant_got['yellow'] >= margin)
-            inconsistent = inconsistent1 | inconsistent2
+            inconsistent3 = sum(ant_got.isna()) == 2  # no measurements for ant
+            inconsistent = inconsistent1 | inconsistent2 | inconsistent3
 
             classifications[ant] = {'giver': giver, 'receiver': receiver, 'vol0': vol0, 'inconsistent': inconsistent}
 
@@ -796,7 +814,7 @@ class ExperimentData:
                 split2 = split1[-1].split('.')
                 vidnum = float(split2[0])
                 p = p.assign(vidnum=vidnum)
-                df_list.append(p[['vidnum', 'id', 'actual_ant1', 'actual_ant2', 'actual_start', 'actual_end','group']])
+                df_list.append(p[['vidnum', 'id', 'actual_ant1', 'actual_ant2', 'actual_start', 'actual_end', 'group']])
         all_interactions_df = pd.concat(df_list, ignore_index=True)
         all_interactions_df = all_interactions_df.assign(
             general_start_frame=lambda x: get_general_frame(x.actual_start, x.vidnum),
@@ -854,6 +872,57 @@ class ExperimentData:
             enriched_interactions_df.to_csv(self.exp_path + sep + filename + '.csv', index=False)
 
         return enriched_interactions_df
+
+    def make_clean_interaction_table(self, write_data=False, filename='clean_trophallaxis_table'):
+        final_frame = max(self.clean_crops.index)
+        giver = {}
+        receiver = {}
+        start_frame = {}
+        end_frame = {}
+        transferred_red = {}
+        transferred_yellow = {}
+        x = {}
+        y = {}
+        giver_crop_before_red = {}
+        giver_crop_before_yellow = {}
+        receiver_crop_before_red = {}
+        receiver_crop_before_yellow = {}
+        estimation_confidence = {}
+        group_id = {}
+        for idx, trop_row in self.interactions_df.iterrows():
+            trop = InteractionData(trop_row, self.bdata, self.clean_crops, final_frame, conversion_factors=self.conversion_factors_by_weights_df)
+            giver[idx] = trop.giver
+            receiver[idx] = trop.receiver
+            start_frame[idx] = trop.start_frame
+            end_frame[idx] = trop.end_frame
+            transferred_red[idx] = trop.size['red']
+            transferred_yellow[idx] = trop.size['yellow']
+            x[idx] = trop.x
+            y[idx] = trop.y
+            if trop.ants.index(trop.giver) == 0:
+                giver_crop_before_red[idx] = trop.ant1_crop_before['red']
+                giver_crop_before_yellow[idx] = trop.ant1_crop_before['yellow']
+                receiver_crop_before_red[idx] = trop.ant2_crop_before['red']
+                receiver_crop_before_yellow[idx] = trop.ant2_crop_before['yellow']
+            else:
+                giver_crop_before_red[idx] = trop.ant2_crop_before['red']
+                giver_crop_before_yellow[idx] = trop.ant2_crop_before['yellow']
+                receiver_crop_before_red[idx] = trop.ant1_crop_before['red']
+                receiver_crop_before_yellow[idx] = trop.ant1_crop_before['yellow']
+            estimation_confidence[idx] = trop.estimation_confidence
+            group_id[idx] = trop.group_id
+
+        clean_trophallaxis_df = pd.DataFrame({'giver': giver, 'receiver': receiver, 'start_frame': start_frame,
+                                              'end_frame': end_frame, 'transferred_red': transferred_red,
+                                              'transferred_yellow': transferred_yellow, 'x': x, 'y': y,
+                                              'giver_crop_before_red': giver_crop_before_red, 'giver_crop_before_yellow': giver_crop_before_yellow,
+                                              'receiver_crop_before_red': receiver_crop_before_red, 'receiver_crop_before_yellow': receiver_crop_before_yellow,
+                                              'estimation_confidence': estimation_confidence, 'group_id': group_id})
+
+        if write_data:
+            clean_trophallaxis_df.to_csv(self.exp_path + sep + filename + '.csv', index=False)
+
+        return clean_trophallaxis_df
 
     def enrich_interactions_df_size_and_loc_old(self, write_data=False):
         ant1_got_dict = {}
@@ -1006,7 +1075,7 @@ class ExperimentData:
             lambda x: x['feeding_size_intensity'] / self.conversion_factors_by_weights_df[x['food_source']], axis=1)
 
         if write_data:
-            fdata_with_feed_sizes_ul.to_csv(self.exp_path+sep+r'forager_table_with_feeding_sizes_ul.csv',index=False)
+            fdata_with_feed_sizes_ul.to_csv(self.exp_path+sep+r'forager_table_with_feeding_sizes_ul.csv', index=False)
 
         return fdata_with_feed_sizes_ul
 
