@@ -7,8 +7,12 @@ from os import sep as sep
 from copy import copy
 import os.path
 import csv
-
+from os import path
+import sys
+sys.path.append(path.abspath(r'D:\Lior\phd\Python\Experimenting'))
+from raw_data_processing.Reader import Video
 from numpy import ndarray
+import helper_functions as hf
 
 
 def food_volume_to_PC_amounts(vol_ul, PC_ratio, concentration_mg_per_ml=100):
@@ -24,9 +28,15 @@ def food_volume_to_PC_amounts(vol_ul, PC_ratio, concentration_mg_per_ml=100):
     return P_mg, C_mg
 
 
-def get_general_frame(frame_in_video, video_index, video_length=1001):
-    general_frame = (video_index-1)*video_length + frame_in_video
-    return general_frame
+# def get_general_frame(frame_in_video, video_index, video_length=1001):
+#     general_frame = (video_index-1)*video_length + frame_in_video
+#     return general_frame
+
+def get_general_frame(frame_in_video, video_index, video_lengths):
+    video_lengths_list = [int(float(v[1])) for v in video_lengths]
+    video_start_frames = np.cumsum([0]+video_lengths_list[0:-1])
+    start_frame = np.take(video_start_frames, video_index-1)
+    return start_frame + frame_in_video
 
 
 class AntData:
@@ -304,7 +314,7 @@ class ForagerData(AntData):
         plt.title(f'Forager {self.ant_id}')
         return fig
 
-    def plot_clean_timeline(self, times_s, conversion_factors, include_raw=True, show=False):
+    def plot_clean_timeline(self, times_s, conversion_factors, include_raw=True, show=False, x_axis='time'):
 
         clean_crop_df = self.clean_crop()
 
@@ -315,8 +325,14 @@ class ForagerData(AntData):
             clean_crop_ul.loc[:, c] = clean_crop_df[c] / conversion_factors.loc[0, c]
 
         fig = plt.figure(figsize=[18, 4])
-        plt.plot(raw_crop_ul['yellow'].index*2.8/60, raw_crop_ul['yellow'], '.y', alpha=0.4)
-        plt.plot(raw_crop_ul['red'].index*2.8/60, raw_crop_ul['red'], '.r', alpha=0.4)
+        if x_axis == 'time':
+            x_yellow = raw_crop_ul['yellow'].index*1.4/60
+            x_red = raw_crop_ul['red'].index*1.4/60
+        elif x_axis == 'frame':
+            x_yellow = raw_crop_ul['yellow'].index
+            x_red = raw_crop_ul['red'].index
+        plt.plot(x_yellow, raw_crop_ul['yellow'], '.y', alpha=0.4)
+        plt.plot(x_red, raw_crop_ul['red'], '.r', alpha=0.4)
         plt.ylim([0, max(self.ymax['yellow'] / conversion_factors.loc[0, 'yellow'], self.ymax['red'] / conversion_factors.loc[0, 'red'])])
         plt.xlabel('Time [min]')
         plt.ylabel(r'Crop load [$\mu$l]')
@@ -324,13 +340,26 @@ class ForagerData(AntData):
 
         for start_frame, end_frame in self.interactions_df[['general_start_frame', 'general_end_frame']].itertuples(
                 index=False):
-            plt.axvspan(start_frame*2.8/60, end_frame*2.8/60, facecolor='0.5', alpha=0.2, zorder=-100)
+            if x_axis == 'time':
+                start_frame = start_frame*1.4/60
+                end_frame = end_frame*1.4/60
+            plt.axvspan(start_frame, end_frame, facecolor='0.5', alpha=0.2, zorder=-100)
         for start_frame, end_frame in self.feedings_dict['yellow'][['feeding_start', 'feeding_end']].itertuples(index=False):
-            plt.axvspan(start_frame*2.8/60, end_frame*2.8/60, facecolor='y', alpha=0.3)
+            if x_axis == 'time':
+                start_frame = start_frame*1.4/60
+                end_frame = end_frame*1.4/60
+            plt.axvspan(start_frame, end_frame, facecolor='y', alpha=0.3)
         for start_frame, end_frame in self.feedings_dict['red'][['feeding_start', 'feeding_end']].itertuples(index=False):
-            plt.axvspan(start_frame*2.8/60, end_frame*2.8/60, facecolor='r', alpha=0.3)
+            if x_axis == 'time':
+                start_frame = start_frame*1.4/60
+                end_frame = end_frame*1.4/60
+            plt.axvspan(start_frame, end_frame, facecolor='r', alpha=0.3)
 
-        clean_crop_ul.set_index(clean_crop_ul.index*2.8/60, inplace=True)
+        if x_axis == 'time':
+            clean_x = clean_crop_ul.index*1.4/60
+        elif x_axis == 'frame':
+            clean_x = clean_crop_ul.index
+        clean_crop_ul.set_index(clean_x, inplace=True)
         clean_crop_ul.plot(ax=fig.axes[0], color=[(184 / 255, 134 / 255, 11 / 255), (139 / 255, 0, 0), ], legend=None)
 
         if show:
@@ -710,6 +739,7 @@ class ExperimentData:
         self.bdata = pd.read_csv(self.exp_path+sep+self.condition+sep+self.bdata_path + sep + self.bdata_filename)  # , index_col='frame')
 
         self.start_frame = self.bdata.frame[0]  # index[0]
+        self.video_lengths = self.load_or_create('video_lengths.csv', self.get_video_lengths, write_data=True, load_as='list')
 
         # interactions data
         self.interactions_df = self.load_or_create(r'trophallaxis_table.csv', self.get_interactions_df, write_data=True)
@@ -821,6 +851,22 @@ class ExperimentData:
         bdata_filename = [x for x in filenames if x.startswith('bdata')]
         return bdata_filename[0]
 
+    def get_video_lengths(self,write_data=False):
+        troph_detection_path = self.exp_path + sep + 'with food' + sep + 'trophallaxis detection'
+        video_list = []
+        for folder_path,subfolders,files in os.walk(troph_detection_path):
+            video_list.extend([folder_path + sep + f for f in files if f.endswith('avi')])
+        video_list.sort()
+        video_lengths = []
+        for vid in video_list:
+            vid_object = Video(vid)
+            number_of_frames = vid_object.number_of_frames
+            new_row = [vid, number_of_frames]
+            video_lengths.append(new_row)
+        if write_data:
+            hf.write_to_csv(self.exp_path + sep + 'video_lengths.csv', video_lengths)
+        return video_lengths
+
     def load_or_create(self, filename, creator_method, write_data=False, load_as='df', header=0):
         # check if file exists
         # if exists load it
@@ -868,8 +914,8 @@ class ExperimentData:
                 df_list.append(p[['vidnum', 'id', 'actual_ant1', 'actual_ant2', 'actual_start', 'actual_end', 'group']])
         all_interactions_df = pd.concat(df_list, ignore_index=True)
         all_interactions_df = all_interactions_df.assign(
-            general_start_frame=lambda x: get_general_frame(x.actual_start, x.vidnum),
-            general_end_frame=lambda x: get_general_frame(x.actual_end, x.vidnum),
+            general_start_frame=lambda x: get_general_frame(x.actual_start, x.vidnum, self.video_lengths),
+            general_end_frame=lambda x: get_general_frame(x.actual_end, x.vidnum, self.video_lengths),
             general_group_id=lambda x: 10*(x.vidnum-1)+x.group)
         all_interactions_df.sort_values(by='general_start_frame', inplace=True)
         all_interactions_df.reset_index(inplace=True, drop=True)

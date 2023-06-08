@@ -10,8 +10,8 @@ import pandas as pd
 from Data import AntData, ForagerData, ExperimentData
 from os import sep as sep
 
-exp1 = ExperimentData(24, bdata_path='blob analysis normalized by white paper')
-# enriched_interactions_df = exp1.enrich_interactions_df(write_data=True, filename='trophallaxis_table_enriched_temp_with_conf')
+exp1 = ExperimentData(23, bdata_path='blob analysis normalized by white paper')
+enriched_interactions_df = exp1.enrich_interactions_df(write_data=True, filename='trophallaxis_table_enriched_temp_with_conf')
 # clean_interactions_df = exp1.make_clean_interaction_table(write_data=True, filename='clean_trophallaxis_table_temp')
 transparency_table = pd.read_csv(exp1.exp_path+sep+'transparency_table.csv', index_col='ant')
 exp1.correct_data_for_transparency(transparency_table, save_corrected_files=True)

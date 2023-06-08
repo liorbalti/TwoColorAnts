@@ -4,7 +4,8 @@ from os import sep as sep
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-exp11 = Data.ExperimentData(11, bdata_path='blob analysis normalized by white paper')
+exp11 = Data.ExperimentData(23, bdata_path='blob analysis normalized by white paper')
+# exp11.correct_data_for_transparency()
 
 # ant_id = 535
 pdf_foragers = PdfPages(exp11.exp_path + sep + 'forager_timelines.pdf')
